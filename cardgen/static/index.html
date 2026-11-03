@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Черновик карточки КИП</title>
+<style>
+  :root {
+    --bg: #f6f6f3; --panel: #ffffff; --fg: #1c1c1a; --muted: #67675f; --line: #d9d9d2;
+    --accent: #1f5fbf; --accent-fg: #ffffff; --ok: #1e7b34; --warn: #9a5b00; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --panel: #1f1f1d; --fg: #ebebe7; --muted: #a2a29a; --line: #3a3a35;
+      --accent: #7aa7ff; --accent-fg: #0d1b33; --ok: #7bd88f; --warn: #f0b45c; --bad: #ff8a80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, "Segoe UI", sans-serif; }
+  header { max-width: 1160px; margin: 0 auto; padding: 20px 16px 0; }
+  header h1 { font-size: 20px; margin: 0 0 4px; }
+  header p { margin: 0; color: var(--muted); }
+  main { max-width: 1160px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+  .tabs button { background: none; color: var(--muted); border: 1px solid var(--line); }
+  .tabs button[aria-selected="true"] { color: var(--fg); border-color: var(--accent); }
+  label { display: block; margin-bottom: 10px; font-weight: 600; font-size: 13px; }
+  input[type=text], textarea {
+    display: block; width: 100%; margin-top: 4px; padding: 8px; font: 14px/1.4 ui-monospace, Consolas, monospace;
+    color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  }
+  label.check { display: flex; gap: 8px; align-items: center; font-weight: 400; }
+  button { font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--accent); cursor: pointer; }
+  button[type=submit] { background: var(--accent); color: var(--accent-fg); }
+  button:disabled { opacity: .5; cursor: default; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+  .actions button { background: none; color: var(--accent); }
+  #status { font-weight: 600; }
+  #status.ok { color: var(--ok); } #status.warn { color: var(--warn); } #status.bad { color: var(--bad); }
+  pre { white-space: pre-wrap; word-break: break-word; margin: 0; font: 13px/1.5 ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Черновик карточки товара КИП</h1>
+  <p>Данные прибора → SEO-заголовок, описание, характеристики, запросы и блок для менеджера. Значения берутся только из входа.</p>
+</header>
+<main>
+  <section class="panel">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="json" aria-selected="true">JSON</button>
+      <button type="button" role="tab" data-tab="fields" aria-selected="false">Форма</button>
+    </div>
+    <form id="form">
+      <div data-pane="json">
+        <label>Данные товара в JSON<textarea id="json" rows="18" spellcheck="false"></textarea></label>
+      </div>
+      <div data-pane="fields" hidden>
+        <label>Название*<input type="text" id="f-name"></label>
+        <label>Производитель<input type="text" id="f-manufacturer"></label>
+        <label>Категория<input type="text" id="f-category"></label>
+        <label>Характеристики — по одной в строке, «название: значение»<textarea id="f-specs" rows="7"></textarea></label>
+        <label>Описание или фрагмент паспорта<textarea id="f-description" rows="4"></textarea></label>
+      </div>
+      <label class="check"><input type="checkbox" id="dry"> без модели (dry-run): только разбор данных и промпт</label>
+      <button type="submit" id="go">Сформировать черновик</button>
+    </form>
+  </section>
+  <section class="panel" aria-live="polite">
+    <div id="status">Результат появится здесь.</div>
+    <div class="actions">
+      <button type="button" id="copy-md" disabled>Копировать Markdown</button>
+      <button type="button" id="copy-json" disabled>Копировать JSON</button>
+    </div>
+    <pre id="out"></pre>
+  </section>
+</main>
+<script>
+  const EXAMPLE = {
+    name: "Манометр показывающий DM 02",
+    manufacturer: "Манотомь",
+    specs: { "диапазон измерений": "0–1,6 МПа", "класс точности": "1,5", "присоединение": "G1/2", "диаметр корпуса": "100 мм" },
+    description: "Прибор предназначен для измерения избыточного давления..."
+  };
+  const STATUS = {
+    ok: ["Готово", "ok"], needs_review: ["Требует правки", "warn"], insufficient_data: ["Недостаточно данных", "warn"],
+    dry_run: ["Без модели (dry-run)", "ok"], error: ["Ошибка", "bad"]
+  };
+  const $ = (id) => document.getElementById(id);
+  let tab = "json", last = null;
+
+  $("json").value = JSON.stringify(EXAMPLE, null, 2);
+
+  document.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => {
+    tab = button.dataset.tab;
+    document.querySelectorAll("[data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b === button)));
+    document.querySelectorAll("[data-pane]").forEach((p) => { p.hidden = p.dataset.pane !== tab; });
+  }));
+
+  function fieldsToJson() {
+    const specs = {};
+    for (const line of $("f-specs").value.split("\n")) {
+      if (!line.trim()) continue;
+      const at = line.indexOf(":");
+      if (at < 1) throw new Error("Строка характеристик без двоеточия: «" + line.trim() + "»");
+      specs[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+    }
+    return JSON.stringify({
+      name: $("f-name").value, manufacturer: $("f-manufacturer").value, category: $("f-category").value,
+      specs: specs, description: $("f-description").value
+    });
+  }
+
+  function show(text, kind, output) {
+    $("status").textContent = text;
+    $("status").className = kind || "";
+    $("out").textContent = output || "";
+  }
+
+  $("form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    let body;
+    try { body = tab === "json" ? $("json").value : fieldsToJson(); }
+    catch (err) { show(err.message, "bad"); return; }
+    $("go").disabled = true;
+    show("Формирую черновик…");
+    try {
+      const reply = await fetch("/api/card" + ($("dry").checked ? "?dry_run=true" : ""), {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: body
+      });
+      const data = await reply.json().catch(() => ({}));
+      if (!reply.ok) { last = null; show(data.error || ("Ошибка " + reply.status), "bad"); return; }
+      last = data;
+      const [label, kind] = STATUS[data.result.status] || [data.result.status, ""];
+      show(label, kind, data.markdown);
+    } catch (err) {
+      last = null;
+      show("Сервер не ответил: " + err.message, "bad");
+    } finally {
+      $("go").disabled = false;
+      $("copy-md").disabled = $("copy-json").disabled = !last;
+    }
+  });
+
+  async function copy(text, button) {
+    try { await navigator.clipboard.writeText(text); button.textContent = "Скопировано"; }
+    catch (err) { button.textContent = "Не удалось скопировать"; }
+    setTimeout(() => { button.textContent = button.dataset.label; }, 1500);
+  }
+  for (const [id, pick] of [["copy-md", (d) => d.markdown], ["copy-json", (d) => JSON.stringify(d.result, null, 2)]]) {
+    const button = $(id);
+    button.dataset.label = button.textContent;
+    button.addEventListener("click", () => last && copy(pick(last), button));
+  }
+</script>
+</body>
+</html>

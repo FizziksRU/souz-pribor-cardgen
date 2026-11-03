@@ -1,0 +1,10 @@
+[project]
+name = "cardgen"
+version = "0.1.0"
+description = "Черновики карточек товаров КИП для B2B-магазина с помощью LLM"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
