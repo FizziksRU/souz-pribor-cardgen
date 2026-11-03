@@ -28,7 +28,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _expand(patterns: list[str]) -> tuple[list[Path], list[str]]:
+def expand_patterns(patterns: list[str]) -> tuple[list[Path], list[str]]:
     """Раскрывает шаблоны сами: PowerShell и cmd не делают этого за программу.
 
     Возвращает найденные файлы и шаблоны, под которые не подошёл ни один файл.
@@ -46,7 +46,7 @@ def _expand(patterns: list[str]) -> tuple[list[Path], list[str]]:
     return paths, unmatched
 
 
-def _write(result: CardResult, source: Path, out_dir: Path) -> Path:
+def write_result(result: CardResult, source: Path, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     data = result.model_dump(mode="json", exclude={"prompt"})
     # newline="\n": одинаковые файлы на Windows и Linux, без CRLF
@@ -60,18 +60,42 @@ def _write(result: CardResult, source: Path, out_dir: Path) -> Path:
     return markdown
 
 
+def safe_console() -> None:
+    """Консоль Windows (cp866/cp1251) не умеет «₽», «Ø», «≤»: лучше «?», чем падение после оплаченного запроса."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+
+def clashing_stems(paths: list[Path]) -> list[Path]:
+    """Файлы с одинаковым именем из разных папок: их результаты перезаписали бы друг друга."""
+    stems = [p.stem for p in paths]
+    return [p for p in paths if stems.count(p.stem) > 1]
+
+
+def spent_text(usage) -> str:
+    """Расход по счётчику клиента (у polza.ai он есть; у других клиентов может не быть)."""
+    if usage is None or not usage.requests:
+        return ""
+    tokens = usage.prompt_tokens + usage.completion_tokens
+    unknown = f", у {usage.unpriced} стоимость неизвестна" if usage.unpriced else ""
+    return f" ({usage.requests} запр., {tokens} токенов, {usage.cost_rub:.2f} ₽{unknown})"
+
+
 def _process(path: Path, client: LLMClient | None, out_dir: Path) -> bool:
     """Обрабатывает один файл; False — если файл не удалось обработать."""
+    before = getattr(client, "usage", None)
     try:
         result = generate_card(load_product(path), client)
-        markdown = _write(result, path, out_dir)
+        markdown = write_result(result, path, out_dir)
     except InputError as exc:
         print(f"{path}: {exc}", file=sys.stderr)
         return False
     except OSError as exc:
         print(f"{path}: не удалось записать результат: {exc}", file=sys.stderr)
         return False
-    print(f"{path.name}: {result.status} -> {markdown}")
+    spent = spent_text(client.usage - before) if before is not None else ""
+    print(f"{path.name}: {result.status} -> {markdown}{spent}")
     if result.status == "error":
         print(f"  {result.error}", file=sys.stderr)
         return False
@@ -80,6 +104,7 @@ def _process(path: Path, client: LLMClient | None, out_dir: Path) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    safe_console()
     load_dotenv()
     client = None
     if not args.dry_run:
@@ -88,12 +113,14 @@ def main(argv: list[str] | None = None) -> int:
         except LLMConfigError as exc:
             print(exc, file=sys.stderr)
             return EXIT_CONFIG
-    paths, unmatched = _expand(args.files)
+    paths, unmatched = expand_patterns(args.files)
     for pattern in unmatched:
         print(f"{pattern}: не найдено ни одного файла", file=sys.stderr)
-    stems = [p.stem for p in paths]
-    clashing = [p for p in paths if stems.count(p.stem) > 1]
+    clashing = clashing_stems(paths)
     for path in clashing:
         print(f"{path}: в запуске несколько файлов «{path.stem}» — их результаты перезаписали бы друг друга", file=sys.stderr)
     results = [_process(path, client, args.out) for path in paths if path not in clashing]
+    total = spent_text(getattr(client, "usage", None))
+    if total:
+        print(f"Итого{total}")
     return EXIT_OK if all(results) and not unmatched and not clashing else EXIT_FAILED

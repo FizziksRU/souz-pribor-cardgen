@@ -6,6 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -20,6 +21,9 @@ INDEX = Path(__file__).with_name("static") / "index.html"
 log = logging.getLogger(__name__)
 load_dotenv()
 app = FastAPI(title="Черновики карточек КИП", docs_url=None, redoc_url=None)
+# Сервер слушает только 127.0.0.1, но чужая страница с подменой DNS (DNS rebinding) достучалась бы
+# до него под своим именем и тратила бы деньги на модель — принимаем только локальные имена
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
 
 def _error(message: str, status: int) -> JSONResponse:

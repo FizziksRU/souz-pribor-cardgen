@@ -10,7 +10,14 @@ JSON = {"Content-Type": "application/json"}
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
-    return TestClient(web.app)
+    return TestClient(web.app, base_url="http://127.0.0.1")
+
+
+def test_foreign_host_is_refused(client):
+    # DNS rebinding: чужое имя, указывающее на 127.0.0.1, не должно доходить до модели
+    reply = client.post("/api/card", content=PD100.read_bytes(), headers={**JSON, "Host": "evil.example"})
+
+    assert reply.status_code == 400
 
 
 def post(client, body: bytes, query: str = "?dry_run=true", headers=JSON):
@@ -71,7 +78,7 @@ def test_unexpected_failure_is_json_500(monkeypatch):
         raise RuntimeError("сбой")
 
     monkeypatch.setattr(web, "generate_card", broken)
-    reply = post(TestClient(web.app, raise_server_exceptions=False), PD100.read_bytes())
+    reply = post(TestClient(web.app, base_url="http://127.0.0.1", raise_server_exceptions=False), PD100.read_bytes())
 
     assert reply.status_code == 500
     assert "Внутренняя ошибка" in reply.json()["error"]

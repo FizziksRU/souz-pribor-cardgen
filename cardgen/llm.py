@@ -1,12 +1,12 @@
 """Граница с LLM: общий интерфейс клиента и ошибки.
 
-Конкретный провайдер подключается отдельным классом с методом complete();
-остальной код зависит только от этого интерфейса.
+Конкретный провайдер подключается отдельным классом с методом complete()
+(сейчас — polza.ai, см. polza.py); остальной код зависит только от этого интерфейса.
 """
 
 import os
 from dataclasses import dataclass
-from typing import Literal, Protocol, Sequence
+from typing import Callable, Literal, Protocol, Sequence
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,13 @@ class LLMClient(Protocol):
         """Возвращает текст ответа модели или бросает LLMError."""
 
 
-PROVIDERS: dict[str, type] = {}
+def _polza() -> LLMClient:
+    from .polza import PolzaClient  # SDK грузится, только когда модель действительно нужна
+
+    return PolzaClient.from_env()
+
+
+PROVIDERS: dict[str, Callable[[], LLMClient]] = {"polza": _polza}
 
 
 def client_from_env() -> LLMClient:
@@ -43,6 +49,5 @@ def client_from_env() -> LLMClient:
             "или запустите с --dry-run, чтобы проверить всё, кроме вызова модели."
         )
     if provider not in PROVIDERS:
-        known = ", ".join(sorted(PROVIDERS)) or "пока нет"
-        raise LLMConfigError(f"Неизвестный LLM_PROVIDER «{provider}». Доступные: {known}.")
+        raise LLMConfigError(f"Неизвестный LLM_PROVIDER «{provider}». Доступные: {', '.join(sorted(PROVIDERS))}.")
     return PROVIDERS[provider]()
